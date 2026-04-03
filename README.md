@@ -76,6 +76,19 @@ python inference.py \
   --trace-agent --trace-prompts > agent_trace.log 2>&1
 ```
 
+## Known Issues
+
+| Issue | Why it happens | What to do |
+|---|---|---|
+| `git checkout <sha>` fails during inference/dataset build | Repo history changed, SHA unavailable, or fetch issue | Rebuild dataset, skip bad rows with `--limit` for debugging, and check build summary fail reasons |
+| Dataset build looks “stuck” after schema summary | It is cloning/fetching many repos and test files | Wait for the progress bar; test quickly with `--limit 2` first |
+| Build ends with `kept: 0` and fetch failures | Some repos/SHAs/files are unavailable at source | Use the printed failure counters/examples; rerun later or filter problematic rows |
+| Inference seems frozen when tracing to file | Large trace output + network model calls; stdout is redirected | Run fewer episodes first, reduce trace with `--trace-max-chars`, and tail logs in another terminal |
+| Agent falls back to heuristic/root-cause guess | Model call failed/rate-limited/invalid JSON | Check `--trace-agent` logs, verify `HF_TOKEN`, and retry |
+| All episodes show same score | Usually heuristic fallback + fixed step/reward pattern | Enable trace flags to confirm model output and actions |
+| `rg` not found in sandbox | `ripgrep` isn’t installed in that runtime | The sandbox falls back to `grep` automatically |
+| Episode cap at 20 steps | `MAX_STEPS` is currently fixed in code | Edit `MAX_STEPS` in `inference.py` if you need a larger limit |
+
 ## OpenEnv CLI
 
 ```bash
