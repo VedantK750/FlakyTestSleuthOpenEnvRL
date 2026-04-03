@@ -1,0 +1,32 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environments
+.venv/
+venv/
+openenv/
+
+# Local editor / tooling state
+.vscode/
+.codex/
+.agents/
+
+# Secrets and local config
+.env
+.env.*
+*.local
+
+# Logs and runtime artifacts
+*.log
+outputs/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Dataset/generated outputs
+dataset/__pycache__/
+dataset/py_tasks.csv

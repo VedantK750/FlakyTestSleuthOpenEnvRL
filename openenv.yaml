@@ -1,0 +1,37 @@
+spec_version: 1
+name: flaky_sleuth
+type: space
+runtime: fastapi
+app: server.app:app
+port: 8000
+
+version: 0.1.0
+description: >
+  An RL environment where an LLM agent investigates flaky tests in Python repositories.
+  The agent uses tool-like actions to read files, search code, and run tests, then submits
+  a terminal verdict for classification, root-cause detection, or fix proposal.
+
+action_type: FlakySleuthAction
+observation_type: FlakySleuthObservation
+reward_range: [0.0, 1.0]
+episode_max_steps: 20
+baseline_script: inference.py
+
+tasks:
+  - id: task1_classify
+    name: Flaky vs Stable Classification
+    difficulty: easy
+    description: Classify the target test as flaky or stable.
+  - id: task2_root_cause
+    name: Root Cause Category Identification
+    difficulty: medium
+    description: Predict flaky-test root-cause category (OD, NOD, TD, TZD, NIO, ID, etc.).
+  - id: task3_fix_proposal
+    name: Fix Proposal
+    difficulty: hard
+    description: Propose a concrete fix as unified diff for a known flaky test.
+
+infra:
+  vcpu: 2
+  memory_gb: 8
+  max_inference_minutes: 20

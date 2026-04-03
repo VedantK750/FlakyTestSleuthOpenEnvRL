@@ -1,0 +1,17 @@
+{
+  "OD,OD-Brit": 0.7,
+  "OD,OD-Vic": 0.7,
+  "OD-Brit,OD-Vic": 0.8,
+  "OD,NIO": 0.4,
+  "OD,NDOI": 0.3,
+  "NOD,TD": 0.6,
+  "NOD,TZD": 0.5,
+  "NOD,NDOI": 0.5,
+  "TD,TZD": 0.7,
+  "NOD,ID": 0.3,
+  "UD,OD": 0.2,
+  "UD,NOD": 0.2,
+  "UD,NIO": 0.2,
+  "UD,TD": 0.2,
+  "UD,ID": 0.2
+}
