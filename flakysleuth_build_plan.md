@@ -1213,7 +1213,7 @@ DAY 6 — Polish + Submit
 □ docker build succeeds on submitted repo
 □ inference.py runs without error and produces scores
 □ 3 tasks with graders, all scores in 0.0–1.0
-□ API_BASE_URL, MODEL_NAME, HF_TOKEN env vars defined
+□ API_BASE_URL, MODEL_NAME, OPENROUTER_API_KEY env vars defined
 □ Inference script is named exactly inference.py in root directory
 □ All LLM calls use OpenAI client with those env vars
 □ Runtime < 20 min on vcpu=2, 8GB RAM

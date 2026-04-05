@@ -45,12 +45,12 @@ curl -s http://localhost:8000/health
 
 ## Run Inference
 
-Recommended (HF router):
+Recommended (OpenRouter):
 
 ```bash
-export HF_TOKEN=your_hf_token
-export API_BASE_URL=https://router.huggingface.co/v1
-export MODEL_NAME=openai/gpt-oss-120b:novita
+export OPENROUTER_API_KEY=your_openrouter_api_key
+export API_BASE_URL=https://openrouter.ai/api/v1
+export MODEL_NAME=qwen/qwen3.6-plus:free
 
 python inference.py --dataset-path dataset/py_tasks.csv --episodes-per-task 5
 ```

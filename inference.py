@@ -1,10 +1,10 @@
 """FlakySleuth baseline inference script.
 
 Environment variables:
-  Preferred (Hackathon / Hugging Face router):
-    HF_TOKEN or HUGGINGFACE_HUB_TOKEN
-    API_BASE_URL (optional, defaults to https://router.huggingface.co/v1 when HF token is used)
-    MODEL_NAME (optional, defaults to openai/gpt-oss-120b:novita on HF router)
+  Preferred (OpenRouter):
+    OPENROUTER_API_KEY (or API_KEY)
+    API_BASE_URL (optional, defaults to https://openrouter.ai/api/v1 when OpenRouter key is used)
+    MODEL_NAME (optional, defaults to qwen/qwen3.6-plus:free on OpenRouter)
 
   Optional fallback:
     OPENAI_API_KEY
@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from openai import OpenAI
+
 try:
     from tqdm import tqdm
 except Exception:  # pragma: no cover
@@ -30,20 +31,29 @@ except Exception:  # pragma: no cover
 from env.environment import FlakySleuthEnv
 from env.models import FlakySleuthAction, FlakySleuthObservation
 
-HF_TOKEN = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-API_KEY = os.environ.get("API_KEY") or OPENAI_API_KEY or HF_TOKEN or ""
+RAW_API_KEY = os.environ.get("API_KEY")
+API_KEY = RAW_API_KEY or OPENROUTER_API_KEY or OPENAI_API_KEY or ""
+
+
+def _looks_like_openrouter_key(key: str | None) -> bool:
+    return bool(key and key.startswith("sk-or-"))
+
 
 DEFAULT_BASE_URL = (
-    "https://router.huggingface.co/v1"
-    if (HF_TOKEN and not OPENAI_API_KEY and not os.environ.get("API_KEY"))
+    "https://openrouter.ai/api/v1"
+    if (
+        (OPENROUTER_API_KEY and not RAW_API_KEY and not OPENAI_API_KEY)
+        or (_looks_like_openrouter_key(RAW_API_KEY) and not OPENAI_API_KEY)
+    )
     else "https://api.openai.com/v1"
 )
 API_BASE_URL = os.environ.get("API_BASE_URL", DEFAULT_BASE_URL)
 
 DEFAULT_MODEL = (
-    "openai/gpt-oss-120b:novita"
-    if API_BASE_URL.startswith("https://router.huggingface.co")
+    "qwen/qwen3.6-plus:free"
+    if API_BASE_URL.startswith("https://openrouter.ai")
     else "gpt-4o-mini"
 )
 MODEL_NAME = os.environ.get("MODEL_NAME", DEFAULT_MODEL)
@@ -99,7 +109,7 @@ Repository file tree:
 {tree_preview}
 
 Last tool output:
-{obs.tool_output or '(No action taken yet)'}
+{obs.tool_output or "(No action taken yet)"}
 
 Return only JSON action."""
 
@@ -131,7 +141,9 @@ def heuristic_action(obs: FlakySleuthObservation) -> FlakySleuthAction:
     )
 
 
-def llm_action(messages: list[dict[str, str]]) -> tuple[FlakySleuthAction | None, dict[str, Any]]:
+def llm_action(
+    messages: list[dict[str, str]],
+) -> tuple[FlakySleuthAction | None, dict[str, Any]]:
     meta: dict[str, Any] = {
         "attempted": False,
         "raw_output": "",
@@ -230,7 +242,9 @@ def run_episode(
             else:
                 action = heuristic_action(obs)
                 if llm_meta.get("attempted"):
-                    llm_meta["error"] = "Model response unavailable, using heuristic fallback."
+                    llm_meta["error"] = (
+                        "Model response unavailable, using heuristic fallback."
+                    )
         except Exception as exc:
             llm_meta["error"] = str(exc)
             action = heuristic_action(obs)
@@ -366,7 +380,9 @@ def main() -> None:
             "Valid values: classify,root_cause,fix_proposal."
         )
     if not task_types:
-        raise ValueError("No task types selected. Pass --task-types with at least one value.")
+        raise ValueError(
+            "No task types selected. Pass --task-types with at least one value."
+        )
     results: dict[str, list[float]] = defaultdict(list)
 
     if _looks_like_placeholder_dataset(args.dataset_path):
@@ -377,7 +393,9 @@ def main() -> None:
 
     use_progress = (tqdm is not None) and (not args.no_progress)
     if args.trace_agent and use_progress:
-        print("[info] --trace-agent enabled, disabling progress bars for readable trace logs.")
+        print(
+            "[info] --trace-agent enabled, disabling progress bars for readable trace logs."
+        )
         use_progress = False
     overall_bar = None
     if use_progress:

@@ -42,7 +42,9 @@ def grade(action: FlakySleuthAction, task: dict) -> float:
 
     patterns = EXPECTED_FIX_PATTERNS.get(category, [])
     if patterns:
-        matches = sum(1 for pattern in patterns if pattern.lower() in proposed_fix.lower())
+        matches = sum(
+            1 for pattern in patterns if pattern.lower() in proposed_fix.lower()
+        )
         pattern_score = min(1.0, matches / max(1, len(patterns) * 0.4))
     else:
         pattern_score = 0.5
@@ -64,7 +66,9 @@ def _check_diff_applies(diff_text: str, task: dict) -> float:
 
     patch_path = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False) as handle:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".patch", delete=False
+        ) as handle:
             handle.write(diff_text)
             patch_path = handle.name
 
@@ -84,23 +88,28 @@ def _check_diff_applies(diff_text: str, task: dict) -> float:
 
 
 def _llm_judge(proposed: str, known: str, category: str, test_code: str) -> float:
-    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY")
     openai_key = os.environ.get("OPENAI_API_KEY")
-    api_key = (os.environ.get("API_KEY") or openai_key or hf_token or "").strip()
+    raw_api_key = os.environ.get("API_KEY")
+    api_key = (raw_api_key or openrouter_key or openai_key or "").strip()
     if not api_key:
         return 0.5
 
+    using_openrouter = (openrouter_key and not raw_api_key and not openai_key) or (
+        raw_api_key and raw_api_key.startswith("sk-or-") and not openai_key
+    )
+
     default_base_url = (
-        "https://router.huggingface.co/v1"
-        if (hf_token and not openai_key and not os.environ.get("API_KEY"))
+        "https://openrouter.ai/api/v1"
+        if using_openrouter
         else "https://api.openai.com/v1"
     )
     api_base_url = os.environ.get("API_BASE_URL", default_base_url)
     client = OpenAI(api_key=api_key, base_url=api_base_url)
     model = os.environ.get(
         "MODEL_NAME",
-        "openai/gpt-oss-120b:novita"
-        if api_base_url.startswith("https://router.huggingface.co")
+        "qwen/qwen3.6-plus:free"
+        if api_base_url.startswith("https://openrouter.ai")
         else "gpt-4o-mini",
     )
 
