@@ -14,4 +14,4 @@ def grade_action(action: FlakySleuthAction, task: dict) -> float:
         return grade_t2(action, task)
     if task_type == "fix_proposal":
         return grade_t3(action, task)
-    return 0.0
+    return 0.001

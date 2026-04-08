@@ -95,9 +95,9 @@ class FlakySleuthEnv:
                 wrong_dir_penalty = 0.2
 
             reward = min(
-                1.0,
+                0.999,
                 max(
-                    0.0,
+                    0.001,
                     self.cumulative_progress + terminal_score - late_penalty - wrong_dir_penalty,
                 ),
             )
@@ -117,7 +117,7 @@ class FlakySleuthEnv:
         if not done and self.step_count >= self.max_steps:
             done = True
             info = {
-                "terminal_score": 0.0,
+                "terminal_score": 0.001,
                 "progress_score": self.cumulative_progress,
                 "late_penalty": max(0, self.step_count - 15) * 0.05,
                 "timeout": True,

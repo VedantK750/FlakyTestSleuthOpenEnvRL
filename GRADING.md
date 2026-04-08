@@ -105,10 +105,10 @@ progress = max(-0.25, base_reward - spam_penalty)
 Binary exact-match scorer:
 
 ```text
-if action_type != "classify_flakiness": return 0.0
-if predicted not in {"flaky","stable"}: return 0.0
+if action_type != "classify_flakiness": return 0.001
+if predicted not in {"flaky","stable"}: return 0.001
 truth = task["label"] (default "flaky")
-terminal_score = 1.0 if predicted == truth else 0.0
+terminal_score = 0.999 if predicted == truth else 0.001
 ```
 
 Notes:
@@ -130,7 +130,7 @@ Prediction and truth are normalized by:
   - `OD-VIC` -> `OD-Vic`
   - etc.
 
-If normalized value is not in valid set, score is `0.0`.
+If normalized value is not in valid set, score is `0.001`.
 
 Truth category is the **first** category if semicolon-separated:
 
@@ -141,8 +141,8 @@ raw_truth = str(task["category"]).split(";")[0]
 ### 5.2 Similarity scoring
 
 ```text
-if predicted == truth: return 1.0
-else return similarity[predicted,truth] or similarity[truth,predicted] or 0.0
+if predicted == truth: return 0.999
+else return clamp(similarity[predicted,truth] or similarity[truth,predicted] or 0.0, 0.001, 0.999)
 ```
 
 The similarity matrix is loaded from `dataset/category_similarity.json`.
@@ -171,11 +171,11 @@ Any missing pair defaults to `0.0`.
 Hybrid weighted scorer:
 
 ```text
-if action_type != "propose_fix": return 0.0
-if proposed_fix is empty: return 0.0
+if action_type != "propose_fix": return 0.001
+if proposed_fix is empty: return 0.001
 
 total = 0.35 * pattern_score + 0.25 * apply_score + 0.40 * judge_score
-terminal_score = round(clamp(total, 0.0, 1.0), 4)
+terminal_score = round(clamp(total, 0.001, 0.999), 4)
 ```
 
 ### 6.1 `pattern_score`
@@ -186,7 +186,7 @@ For category with pattern list:
 
 ```text
 matches = number of patterns found (case-insensitive substring)
-pattern_score = min(1.0, matches / max(1, len(patterns) * 0.4))
+pattern_score = min(0.999, matches / max(1, len(patterns) * 0.4))
 ```
 
 If category has no pattern list:
@@ -202,11 +202,11 @@ Current pattern lists:
 ### 6.2 `apply_score` (`_check_diff_applies`)
 
 ```text
-if diff does not contain both '---' and '+++': return 0.0
+if diff does not contain both '---' and '+++': return 0.001
 if sandbox_root missing or not existing: return 0.3
 else run: patch --dry-run -p1 -i <temp_patch>
-  return 1.0 if patch exit code == 0
-  return 0.0 otherwise
+  return 0.999 if patch exit code == 0
+  return 0.001 otherwise
 on exception: return 0.3
 ```
 
@@ -237,22 +237,22 @@ API/model resolution in judge:
 ### Example A: Task 1 correct classify early
 
 - `cumulative_progress = 0.05`
-- `terminal_score = 1.0`
+- `terminal_score = 0.999`
 - `late_penalty = 0.0`
 - `wrong_dir_penalty = 0.0`
 
 ```text
-reward = clamp(0.05 + 1.0 - 0 - 0, 0, 1) = 1.0
+reward = clamp(0.05 + 0.999 - 0 - 0, 0, 1) = 0.999
 ```
 
 ### Example B: Task 2 wrong category but some exploration
 
 - `cumulative_progress = 0.05`
-- `terminal_score = 0.0` (no similarity match)
+- `terminal_score = 0.001` (no similarity match)
 - penalties = `0`
 
 ```text
-reward = clamp(0.05 + 0.0, 0, 1) = 0.05
+reward = clamp(0.05 + 0.001, 0, 1) = 0.051
 ```
 
 ### Example C: Task 3 with weak fix and no API key

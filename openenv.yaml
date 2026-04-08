@@ -13,7 +13,7 @@ description: >
 
 action_type: FlakySleuthAction
 observation_type: FlakySleuthObservation
-reward_range: [0.0, 1.0]
+reward_range: (0.001, 0.999)
 episode_max_steps: 20
 baseline_script: inference.py
 

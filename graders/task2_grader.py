@@ -36,7 +36,7 @@ def _normalize_category(value: str) -> str:
 
 def _get_similarity(predicted: str, truth: str) -> float:
     if predicted == truth:
-        return 1.0
+        return 0.999
     key_a = f"{predicted},{truth}"
     key_b = f"{truth},{predicted}"
     return float(_RAW_SIM.get(key_a, _RAW_SIM.get(key_b, 0.0)))
@@ -45,15 +45,16 @@ def _get_similarity(predicted: str, truth: str) -> float:
 def grade(action: FlakySleuthAction, task: dict) -> float:
     """Root cause category classification with matrix-based partial credit."""
     if action.action_type != "classify_root_cause":
-        return 0.0
+        return 0.001
 
     predicted = _normalize_category(action.argument)
     if predicted not in VALID_CATEGORIES:
-        return 0.0
+        return 0.001
 
     raw_truth = str(task.get("category", "")).split(";")[0]
     truth = _normalize_category(raw_truth)
     if truth not in VALID_CATEGORIES:
-        return 0.0
+        return 0.001
 
-    return _get_similarity(predicted, truth)
+    sim = _get_similarity(predicted, truth)
+    return max(0.001, min(0.999, sim))

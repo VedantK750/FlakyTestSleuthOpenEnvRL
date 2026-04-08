@@ -30,11 +30,11 @@ EXPECTED_FIX_PATTERNS = {
 def grade(action: FlakySleuthAction, task: dict) -> float:
     """Hybrid fixer grader: pattern + dry-run apply + LLM judge."""
     if action.action_type != "propose_fix":
-        return 0.0
+        return 0.001
 
     proposed_fix = action.argument.strip()
     if not proposed_fix:
-        return 0.0
+        return 0.001
 
     category = str(task.get("category", "")).split(";")[0].strip().upper()
     known_fix = task.get("known_fix_diff", "") or ""
@@ -45,7 +45,7 @@ def grade(action: FlakySleuthAction, task: dict) -> float:
         matches = sum(
             1 for pattern in patterns if pattern.lower() in proposed_fix.lower()
         )
-        pattern_score = min(1.0, matches / max(1, len(patterns) * 0.4))
+        pattern_score = min(0.999, matches / max(1, len(patterns) * 0.4))
     else:
         pattern_score = 0.5
 
@@ -53,12 +53,12 @@ def grade(action: FlakySleuthAction, task: dict) -> float:
     judge_score = _llm_judge(proposed_fix, known_fix, category, test_code)
 
     total = (0.35 * pattern_score) + (0.25 * apply_score) + (0.40 * judge_score)
-    return round(min(1.0, max(0.0, total)), 4)
+    return round(min(0.999, max(0.001, total)), 4)
 
 
 def _check_diff_applies(diff_text: str, task: dict) -> float:
     if "+++" not in diff_text or "---" not in diff_text:
-        return 0.0
+        return 0.001
 
     repo_root = str(task.get("sandbox_root", "")).strip()
     if not repo_root or not Path(repo_root).exists():
@@ -79,7 +79,7 @@ def _check_diff_applies(diff_text: str, task: dict) -> float:
             text=True,
             timeout=10,
         )
-        return 1.0 if result.returncode == 0 else 0.0
+        return 0.999 if result.returncode == 0 else 0.001
     except Exception:
         return 0.3
     finally:
@@ -156,6 +156,7 @@ Respond ONLY with JSON:
         raw = raw.replace("```json", "").replace("```", "").strip()
         payload = json.loads(raw)
         score = int(payload.get("score", 5))
-        return max(0.0, min(10.0, score)) / 10.0
+        raw_score = max(0.0, min(10.0, score)) / 10.0
+        return max(0.001, min(0.999, raw_score))
     except Exception:
         return 0.5

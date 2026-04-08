@@ -527,7 +527,7 @@ class FlakySleuthEnv:
                     and self.current_task.get("label") == "flaky"):
                 wrong_dir_penalty = 0.2
             
-            reward = min(1.0, max(0.0,
+            reward = min(0.999, max(0.001,
                 self.cumulative_progress + terminal_score
                 - late_penalty - wrong_dir_penalty
             ))
@@ -594,16 +594,16 @@ class FlakySleuthEnv:
         test_file = task.get("test_file", "")
         
         if test_file and test_file in filepath:
-            return 0.07   # reading the actual test file
+            return 0.0017   # reading the actual test file
         if any(filepath.endswith(ext) for ext in (".py",)):
-            return 0.03   # any python file
-        return 0.01       # non-python file (requirements, config, etc.)
+            return 0.0013   # any python file
+        return 0.0011       # non-python file (requirements, config, etc.)
 
     def _search_relevance_reward(self, pattern: str) -> float:
         pattern_lower = pattern.lower()
         if any(sig in pattern_lower for sig in FLAKY_SIGNAL_PATTERNS):
-            return 0.04   # searching for known flakiness signals
-        return 0.01       # generic search
+            return 0.0014   # searching for known flakiness signals
+        return 0.0011       # generic search
 
     def _make_obs(self, tool_output=None) -> FlakySleuthObservation:
         task = self.current_task
@@ -639,7 +639,7 @@ def grade_action(action: FlakySleuthAction, task: dict) -> float:
         return grade_t2(action, task)
     elif tt == "fix_proposal":
         return grade_t3(action, task)
-    return 0.0
+    return 0.001
 ```
 
 ### 7.2 Task 1 Grader (`graders/task1_grader.py`)
@@ -650,16 +650,16 @@ from env.models import FlakySleuthAction
 def grade(action: FlakySleuthAction, task: dict) -> float:
     """Binary classification: flaky or stable. Exact match only."""
     if action.action_type != "classify_flakiness":
-        return 0.0
+        return 0.001
     
     predicted = action.argument.strip().lower()
     if predicted not in ("flaky", "stable"):
-        return 0.0
+        return 0.001
     
     # All IDoFT rows are flaky; stable examples are synthetically added
     # with label="stable" during dataset construction
     ground_truth = task.get("label", "flaky")
-    return 1.0 if predicted == ground_truth else 0.0
+    return 0.999 if predicted == ground_truth else 0.0
 ```
 
 ### 7.3 Task 2 Grader (`graders/task2_grader.py`)
@@ -677,7 +677,7 @@ with open(_SIM_PATH) as f:
 
 def _get_similarity(pred: str, true: str) -> float:
     if pred == true:
-        return 1.0
+        return 0.999
     key1 = f"{pred},{true}"
     key2 = f"{true},{pred}"
     return _RAW_SIM.get(key1, _RAW_SIM.get(key2, 0.0))
@@ -695,7 +695,7 @@ def grade(action: FlakySleuthAction, task: dict) -> float:
     Wrong family = 0.0
     """
     if action.action_type != "classify_root_cause":
-        return 0.0
+        return 0.001
     
     predicted = action.argument.strip().upper()
     
@@ -703,7 +703,7 @@ def grade(action: FlakySleuthAction, task: dict) -> float:
     predicted = predicted.replace(" ", "-")  # "OD Brit" → "OD-Brit"
     
     if predicted not in VALID_CATEGORIES:
-        return 0.0   # invalid category string
+        return 0.001   # invalid category string
     
     # Take primary category from dataset (first if semicolon-separated)
     true_category = str(task.get("category", "")).split(";")[0].strip().upper()
@@ -745,11 +745,11 @@ def grade(action: FlakySleuthAction, task: dict) -> float:
     Component C: LLM judge         — 0.40 weight
     """
     if action.action_type != "propose_fix":
-        return 0.0
+        return 0.001
     
     proposed_fix = action.argument.strip()
     if not proposed_fix:
-        return 0.0
+        return 0.001
     
     category = str(task.get("category", "")).split(";")[0].strip().upper()
     known_fix = task.get("known_fix_diff", "") or ""
@@ -759,7 +759,7 @@ def grade(action: FlakySleuthAction, task: dict) -> float:
     patterns = EXPECTED_FIX_PATTERNS.get(category, [])
     if patterns:
         matches = sum(1 for p in patterns if p in proposed_fix)
-        pattern_score = min(1.0, matches / max(1, len(patterns) * 0.4))
+        pattern_score = min(0.999, matches / max(1, len(patterns) * 0.4))
     else:
         pattern_score = 0.5
     
@@ -770,7 +770,7 @@ def grade(action: FlakySleuthAction, task: dict) -> float:
     judge_score = _llm_judge(proposed_fix, known_fix, category, test_code)
     
     total = (0.35 * pattern_score) + (0.25 * apply_score) + (0.40 * judge_score)
-    return round(min(1.0, max(0.0, total)), 4)
+    return round(min(0.999, max(0.001, total)), 4)
 
 
 def _check_diff_applies(fix: str, task: dict) -> float:
@@ -791,7 +791,7 @@ def _check_diff_applies(fix: str, task: dict) -> float:
             capture_output=True, text=True, timeout=10
         )
         os.unlink(patch_path)
-        return 1.0 if result.returncode == 0 else 0.0
+        return 0.999 if result.returncode == 0 else 0.0
     except Exception:
         return 0.3  # can't verify, neutral
 
@@ -905,7 +905,7 @@ description: >
 
 observation_type: FlakySleuthObservation
 action_type: FlakySleuthAction
-reward_range: [0.0, 1.0]
+reward_range: (0.001, 0.999)
 
 tasks:
   - id: task1_classify
@@ -1176,7 +1176,7 @@ DAY 3 — Graders
 □ Implement graders/task2_grader.py + verify similarity matrix
 □ Implement graders/task3_grader.py (pattern + diff + LLM judge)
 □ Unit test all 3 graders with hardcoded inputs
-□ Verify scores are always in [0.0, 1.0]
+□ Verify scores are always in (0.001, 0.999)
 
 DAY 4 — Server + Spec Compliance
 ──────────────────────────────────

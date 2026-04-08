@@ -78,6 +78,7 @@ MODEL_NAME = os.environ.get("MODEL_NAME", DEFAULT_MODEL)
 EPISODES_PER_TASK = 2
 MAX_STEPS = 20
 MEMORY_MAX_CHARS = 900
+LLM_MAX_RETRIES = 2
 
 client = OpenAI(api_key=API_KEY, base_url=API_BASE_URL)
 
@@ -113,6 +114,152 @@ Rules:
 
 def _to_single_line(text: str) -> str:
     return " ".join(str(text).split())
+
+
+def _short_error(text: str, max_chars: int = 220) -> str:
+    one_line = _to_single_line(text)
+    if len(one_line) <= max_chars:
+        return one_line
+    hidden = len(one_line) - max_chars
+    return f"{one_line[:max_chars]}...[truncated {hidden} chars]"
+
+
+class _ActionParseError(Exception):
+    def __init__(self, reason: str, detail: str) -> None:
+        super().__init__(f"{reason}: {detail}")
+        self.reason = reason
+        self.detail = detail
+
+
+def _strip_code_fences(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if lines:
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+    if stripped.lower().startswith("json\n"):
+        stripped = stripped[5:].strip()
+    return stripped
+
+
+def _extract_first_json_object(text: str) -> str | None:
+    start = -1
+    depth = 0
+    in_string = False
+    escaped = False
+    for idx, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            if depth == 0:
+                start = idx
+            depth += 1
+            continue
+        if ch == "}":
+            if depth == 0:
+                continue
+            depth -= 1
+            if depth == 0 and start >= 0:
+                return text[start : idx + 1]
+    return None
+
+
+def _parse_action_payload(raw: str) -> tuple[FlakySleuthAction, str]:
+    raw_text = (raw or "").strip()
+    if not raw_text:
+        raise _ActionParseError("llm_empty_output", "empty response body")
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add_candidate(value: str | None) -> None:
+        if value is None:
+            return
+        cleaned = value.strip()
+        if not cleaned or cleaned in seen:
+            return
+        seen.add(cleaned)
+        candidates.append(cleaned)
+
+    add_candidate(raw_text)
+    stripped = _strip_code_fences(raw_text)
+    add_candidate(stripped)
+    add_candidate(_extract_first_json_object(stripped))
+    add_candidate(_extract_first_json_object(raw_text))
+
+    json_errors: list[str] = []
+    schema_errors: list[str] = []
+
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            json_errors.append(str(exc))
+            continue
+        if not isinstance(payload, dict):
+            schema_errors.append(f"top-level JSON must be an object, got {type(payload).__name__}")
+            continue
+        try:
+            action = FlakySleuthAction.model_validate(payload)
+        except Exception as exc:
+            schema_errors.append(str(exc))
+            continue
+        return action, candidate
+
+    if schema_errors:
+        raise _ActionParseError("llm_schema_error", _short_error(schema_errors[-1], max_chars=300))
+    if json_errors:
+        raise _ActionParseError("llm_json_parse_error", _short_error(json_errors[-1], max_chars=300))
+    raise _ActionParseError("llm_json_parse_error", "unable to extract JSON object")
+
+
+def _json_repair_prompt(error_text: str, raw_output: str) -> str:
+    clipped_raw = _short_error(raw_output or "(empty)", max_chars=300)
+    clipped_err = _short_error(error_text, max_chars=260)
+    return (
+        "Your previous response was invalid.\n"
+        f"Parser error: {clipped_err}\n"
+        f"Previous output (truncated): {clipped_raw}\n"
+        "Respond again with ONLY one valid JSON object and no extra text.\n"
+        'Required schema: {"action_type": "<one valid action>", "argument": "<string>", "metadata": {}}\n'
+        'Do NOT wrap in markdown fences. Do NOT add commentary.'
+    )
+
+
+def _chat_completion_request(messages: list[dict[str, str]]) -> Any:
+    base_kwargs = {
+        "model": MODEL_NAME,
+        "messages": messages,
+        "max_tokens": 400,
+        "temperature": 0.0,
+    }
+    try:
+        return client.chat.completions.create(
+            response_format={"type": "json_object"},
+            **base_kwargs,
+        )
+    except Exception as json_mode_exc:
+        try:
+            return client.chat.completions.create(**base_kwargs)
+        except Exception as plain_mode_exc:
+            raise RuntimeError(
+                f"json_mode_error={json_mode_exc}; plain_mode_error={plain_mode_exc}"
+            ) from plain_mode_exc
 
 
 def _compliance_log_start(task: str, benchmark: str, model: str) -> None:
@@ -207,22 +354,52 @@ def llm_action(
         "attempted": False,
         "raw_output": "",
         "error": "",
+        "reason": "",
+        "attempt_count": 0,
     }
     if not API_KEY:
+        meta["reason"] = "no_api_key"
         return None, meta
 
-    meta["attempted"] = True
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=messages,
-        max_tokens=400,
-        temperature=0.0,
-    )
-    raw = (response.choices[0].message.content or "").strip()
-    meta["raw_output"] = raw
-    cleaned = raw.replace("```json", "").replace("```", "").strip()
-    payload = json.loads(cleaned)
-    return FlakySleuthAction.model_validate(payload), meta
+    work_messages = list(messages)
+    last_error = ""
+    for attempt in range(LLM_MAX_RETRIES + 1):
+        meta["attempted"] = True
+        meta["attempt_count"] = attempt + 1
+        try:
+            response = _chat_completion_request(work_messages)
+        except Exception as exc:
+            last_error = f"request_failed attempt={attempt + 1}: {exc}"
+            meta["error"] = _short_error(last_error, max_chars=500)
+            meta["reason"] = "llm_http_error"
+            if attempt < LLM_MAX_RETRIES:
+                work_messages = work_messages + [
+                    {"role": "user", "content": _json_repair_prompt(last_error, "")}
+                ]
+                continue
+            return None, meta
+
+        raw = (response.choices[0].message.content or "").strip()
+        meta["raw_output"] = raw
+        try:
+            action, _ = _parse_action_payload(raw)
+            meta["error"] = ""
+            meta["reason"] = "ok"
+            return action, meta
+        except _ActionParseError as exc:
+            last_error = f"{exc.reason}: {exc.detail}"
+            meta["error"] = _short_error(last_error, max_chars=500)
+            meta["reason"] = exc.reason
+            if attempt < LLM_MAX_RETRIES:
+                work_messages = work_messages + [
+                    {"role": "user", "content": _json_repair_prompt(last_error, raw)}
+                ]
+                continue
+            return None, meta
+
+    meta["error"] = _short_error(last_error or "unknown llm failure", max_chars=500)
+    meta["reason"] = meta["reason"] or "llm_error"
+    return None, meta
 
 
 def _clip_text(text: str, max_chars: int) -> str:
@@ -431,6 +608,7 @@ def run_episode(
             action: FlakySleuthAction
             action_source = "heuristic"
             llm_meta: dict[str, Any] = {"attempted": False, "raw_output": "", "error": ""}
+            step_fallback_reason: str | None = None
             try:
                 candidate, llm_meta = llm_action(messages)
                 if candidate is not None:
@@ -468,12 +646,15 @@ def run_episode(
                 heuristic_steps += 1
                 if not API_KEY:
                     reason_key = "no_api_key"
+                elif llm_meta.get("reason") and llm_meta.get("reason") != "ok":
+                    reason_key = str(llm_meta.get("reason"))
                 elif llm_meta.get("error"):
                     reason_key = "llm_error"
                 elif llm_meta.get("attempted"):
                     reason_key = "empty_or_invalid_response"
                 else:
                     reason_key = "heuristic_default"
+                step_fallback_reason = reason_key
                 fallback_reasons[reason_key] = fallback_reasons.get(reason_key, 0) + 1
 
             if trace_agent and not compliance_stdout:
@@ -526,6 +707,15 @@ def run_episode(
                     step_error = str(raw_err)
             if not step_error and obs.tool_output and str(obs.tool_output).startswith("ERROR:"):
                 step_error = str(obs.tool_output)
+            if step_fallback_reason:
+                fallback_detail = ""
+                if llm_meta.get("error"):
+                    fallback_detail = f" detail={_short_error(str(llm_meta['error']))}"
+                fallback_suffix = f"llm_fallback:{step_fallback_reason}{fallback_detail}"
+                if step_error:
+                    step_error = f"{step_error}; {fallback_suffix}"
+                else:
+                    step_error = fallback_suffix
 
             if compliance_stdout:
                 _compliance_log_step(
@@ -600,7 +790,7 @@ def run_episode(
             _compliance_log_end(
                 success=success,
                 steps=steps_taken,
-                score=min(max(final_episode_score, 0.0), 1.0),
+                score=min(max(final_episode_score, 0.001), 0.999),
                 rewards=rewards,
             )
 
