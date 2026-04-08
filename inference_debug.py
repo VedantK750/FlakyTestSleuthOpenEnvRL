@@ -141,18 +141,13 @@ def _compliance_log_end(success: bool, steps: int, score: float, rewards: list[f
     )
 
 
-def obs_to_prompt(
-    obs: FlakySleuthObservation,
-    *,
-    memory_hint: str | None = None,
-    max_steps: int = MAX_STEPS,
-) -> str:
+def obs_to_prompt(obs: FlakySleuthObservation, *, memory_hint: str | None = None) -> str:
     tree_preview = "\n".join(obs.file_tree[:40])
     return f"""TASK: {obs.task_description}
 
 Repository: {obs.repo_url}
 Test name: {obs.test_name}
-Step: {obs.step_count}/{max_steps}
+Step: {obs.step_count}/{MAX_STEPS}
 
 Test source code:
 ```python
@@ -379,7 +374,7 @@ def run_episode(
     try:
         obs = env.reset()
 
-        initial_prompt = obs_to_prompt(obs, memory_hint=memory_hint, max_steps=env.max_steps)
+        initial_prompt = obs_to_prompt(obs, memory_hint=memory_hint)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": initial_prompt},
@@ -407,7 +402,7 @@ def run_episode(
                 max_chars=trace_max_chars,
             )
 
-        for step_idx in range(env.max_steps):
+        for step_idx in range(MAX_STEPS):
             messages, prune_info = _prune_messages_window(
                 messages,
                 step_number=step_idx + 1,
@@ -575,7 +570,7 @@ def run_episode(
 
             exploration_reward_total += reward
             messages.append({"role": "assistant", "content": action.model_dump_json()})
-            next_prompt = obs_to_prompt(obs, memory_hint=memory_hint, max_steps=env.max_steps)
+            next_prompt = obs_to_prompt(obs, memory_hint=memory_hint)
             messages.append({"role": "user", "content": next_prompt})
             if trace_agent and trace_prompts and not compliance_stdout:
                 _trace_print(
@@ -635,12 +630,6 @@ def _parse_args() -> argparse.Namespace:
         help="Comma-separated task types to run (classify,root_cause,fix_proposal).",
     )
     parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=MAX_STEPS,
-        help="Max steps per episode.",
-    )
-    parser.add_argument(
         "--no-progress",
         action="store_true",
         help="Disable progress bars and print classic per-episode logs.",
@@ -666,18 +655,11 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--compliance-stdout",
-        dest="compliance_stdout",
         action="store_true",
         help=(
             "Emit strict compliance logs to stdout using only [START]/[STEP]/[END] lines "
             "for each episode."
         ),
-    )
-    parser.add_argument(
-        "--no-compliance-stdout",
-        dest="compliance_stdout",
-        action="store_false",
-        help="Disable strict compliance logs and print baseline summaries/progress.",
     )
     parser.add_argument(
         "--benchmark-name",
@@ -702,14 +684,13 @@ def _parse_args() -> argparse.Namespace:
         default=50000,
         help="Approx max chars for messages before forced pruning by size.",
     )
-    parser.set_defaults(compliance_stdout=True)
     return parser.parse_args()
 
 
 def main() -> None:
     run_start = time.perf_counter()
     args = _parse_args()
-    env = FlakySleuthEnv(dataset_path=args.dataset_path, max_steps=args.max_steps)
+    env = FlakySleuthEnv(dataset_path=args.dataset_path)
     allowed_task_types = {"classify", "root_cause", "fix_proposal"}
     task_types = [t.strip() for t in args.task_types.split(",") if t.strip()]
     invalid = [t for t in task_types if t not in allowed_task_types]
@@ -730,12 +711,7 @@ def main() -> None:
             "Build real dataset from py-data.csv for real evaluation."
         )
 
-    use_progress = (
-        (tqdm is not None)
-        and (not args.no_progress)
-        and (not args.compliance_stdout)
-        and os.isatty(1)
-    )
+    use_progress = (tqdm is not None) and (not args.no_progress) and (not args.compliance_stdout)
     if args.trace_agent and use_progress and not args.compliance_stdout:
         print(
             "[info] --trace-agent enabled, disabling progress bars for readable trace logs."

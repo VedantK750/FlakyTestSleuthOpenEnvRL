@@ -1,0 +1,17 @@
+.git/
+.agents/
+.codex/
+.vscode/
+openenv/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+agent_trace.log
+debug_trace.log
+debug_trace2.log
+outputs/
+.pytest_cache/

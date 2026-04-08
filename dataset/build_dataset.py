@@ -12,6 +12,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import subprocess
 import tempfile
@@ -38,6 +39,19 @@ NOTES_COL = "Notes"
 TEST_NAME_ALIASES = [
     "Pytest Test Name",
     "Pytest Test Name (PathToFile::TestClass::TestMethod or PathToFile::TestMethod)",
+]
+OUTPUT_COLUMNS = [
+    "repo_url",
+    "sha",
+    "test_name",
+    "test_file",
+    "category",
+    "label",
+    "status",
+    "pr_link",
+    "task_types",
+    "test_code",
+    "known_fix_diff",
 ]
 
 
@@ -83,8 +97,36 @@ def _is_accepted_status(status: str) -> bool:
     return value in {"accepted", "merged", "fixed"}
 
 
+def _non_interactive_git_env() -> dict[str, str]:
+    env = os.environ.copy()
+    # Never block on credential prompts while iterating large public datasets.
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GCM_INTERACTIVE"] = "Never"
+    return env
+
+
+def _has_value(value: str) -> bool:
+    text = str(value or "").strip().lower()
+    return text not in {"", "nan", "none"}
+
+
+def _is_non_unmaintained_status(status: str) -> bool:
+    value = str(status or "").strip().lower()
+    return value not in {"", "nan", "none", "unmaintained"}
+
+
+def _row_preference_rank(row_out: dict[str, str]) -> tuple[int, int, int]:
+    task_tokens = {t.strip() for t in str(row_out.get("task_types", "")).split(";") if t.strip()}
+    return (
+        1 if "fix_proposal" in task_tokens else 0,
+        1 if _has_value(str(row_out.get("pr_link", ""))) else 0,
+        1 if _is_non_unmaintained_status(str(row_out.get("status", ""))) else 0,
+    )
+
+
 def fetch_test_code(repo_url: str, sha: str, pytest_test_name: str) -> tuple[str, str, str]:
     test_file = pytest_test_name.split("::")[0]
+    git_env = _non_interactive_git_env()
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             init = subprocess.run(
@@ -93,6 +135,8 @@ def fetch_test_code(repo_url: str, sha: str, pytest_test_name: str) -> tuple[str
                 text=True,
                 check=False,
                 timeout=20,
+                env=git_env,
+                stdin=subprocess.DEVNULL,
             )
             if init.returncode != 0:
                 return "", "git_init_failed", (init.stderr or init.stdout or "").strip()[:200]
@@ -103,6 +147,8 @@ def fetch_test_code(repo_url: str, sha: str, pytest_test_name: str) -> tuple[str
                 text=True,
                 check=False,
                 timeout=10,
+                env=git_env,
+                stdin=subprocess.DEVNULL,
             )
             if remote.returncode != 0:
                 return "", "git_remote_add_failed", (remote.stderr or remote.stdout or "").strip()[:200]
@@ -114,6 +160,8 @@ def fetch_test_code(repo_url: str, sha: str, pytest_test_name: str) -> tuple[str
                 text=True,
                 check=False,
                 timeout=90,
+                env=git_env,
+                stdin=subprocess.DEVNULL,
             )
             if fetch.returncode != 0:
                 return "", "git_fetch_sha_failed", (fetch.stderr or fetch.stdout or "").strip()[:200]
@@ -124,6 +172,8 @@ def fetch_test_code(repo_url: str, sha: str, pytest_test_name: str) -> tuple[str
                 text=True,
                 check=False,
                 timeout=30,
+                env=git_env,
+                stdin=subprocess.DEVNULL,
             )
             if checkout.returncode != 0:
                 return "", "git_checkout_failed", (checkout.stderr or checkout.stdout or "").strip()[:200]
@@ -133,7 +183,7 @@ def fetch_test_code(repo_url: str, sha: str, pytest_test_name: str) -> tuple[str
         file_path = Path(tmpdir) / test_file
         if not file_path.exists():
             return "", "test_file_missing_at_sha", test_file
-        return file_path.read_text(encoding="utf-8", errors="replace")[:5000], "", ""
+        return file_path.read_text(encoding="utf-8", errors="replace")[:10000], "", ""
 
 
 def fetch_pr_diff(pr_link: str, github_token: str) -> str:
@@ -200,6 +250,7 @@ def build(
 
     stats: dict[str, int] = {
         "kept": 0,
+        "kept_unique": 0,
         "skipped_missing_core_fields": 0,
         "skipped_ud": 0,
         "skipped_no_task_types": 0,
@@ -207,83 +258,91 @@ def build(
         "skipped_test_code_fetch_git_fail": 0,
         "skipped_test_code_fetch_file_missing": 0,
         "fix_diff_fetched": 0,
+        "duplicate_key_rows_seen": 0,
+        "duplicate_key_replaced": 0,
+        "duplicate_key_kept_existing": 0,
     }
     fetch_fail_examples: list[dict[str, str]] = []
-
-    rows = []
+    canonical_rows: dict[tuple[str, str, str], dict[str, str]] = {}
+    output_path = Path(output_csv)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     iterator = df.iterrows()
     if tqdm is not None:
         iterator = tqdm(iterator, total=total_rows, desc="Building tasks", unit="row")
 
-    processed = 0
-    for idx, (_, row) in enumerate(iterator, start=1):
-        if idx > total_rows:
-            break
-        processed = idx
+    with output_path.open("w", encoding="utf-8", newline="") as out_fp:
+        writer = csv.DictWriter(out_fp, fieldnames=OUTPUT_COLUMNS, extrasaction="ignore")
+        writer.writeheader()
+        out_fp.flush()
 
-        repo_url = str(row.get(PROJECT_URL_COL, "")).strip()
-        sha = str(row.get(SHA_COL, "")).strip()
-        test_name = str(row.get(test_name_col, "")).strip()
-        category_raw = str(row.get(CATEGORY_COL, "")).strip()
-        status = str(row.get(STATUS_COL, "")).strip()
-        pr_link = str(row.get(PR_LINK_COL, "")).strip()
+        processed = 0
+        for idx, (_, row) in enumerate(iterator, start=1):
+            if idx > total_rows:
+                break
+            processed = idx
 
-        if not repo_url or not sha or not test_name or not category_raw:
-            stats["skipped_missing_core_fields"] += 1
-            _update_progress(iterator, tqdm, stats)
-            continue
+            repo_url = str(row.get(PROJECT_URL_COL, "")).strip()
+            sha = str(row.get(SHA_COL, "")).strip()
+            test_name = str(row.get(test_name_col, "")).strip()
+            category_raw = str(row.get(CATEGORY_COL, "")).strip()
+            status = str(row.get(STATUS_COL, "")).strip()
+            pr_link = str(row.get(PR_LINK_COL, "")).strip()
 
-        category = category_raw.split(";")[0].strip()
-        if category == "UD":
-            stats["skipped_ud"] += 1
-            _update_progress(iterator, tqdm, stats)
-            continue
+            if not repo_url or not sha or not test_name or not category_raw:
+                stats["skipped_missing_core_fields"] += 1
+                _update_progress(iterator, tqdm, stats)
+                continue
 
-        task_types: list[str] = []
-        if category in TASK12_CATEGORIES:
-            task_types.extend(["classify", "root_cause"])
-        if category in TASK3_CATEGORIES and _is_accepted_status(status) and _parse_pr_link(pr_link):
-            task_types.append("fix_proposal")
+            category = category_raw.split(";")[0].strip()
+            if category == "UD":
+                stats["skipped_ud"] += 1
+                _update_progress(iterator, tqdm, stats)
+                continue
 
-        if not task_types:
-            stats["skipped_no_task_types"] += 1
-            _update_progress(iterator, tqdm, stats)
-            continue
+            task_types: list[str] = []
+            if category in TASK12_CATEGORIES:
+                task_types.extend(["classify", "root_cause"])
+            if category in TASK3_CATEGORIES and _is_accepted_status(status) and _parse_pr_link(pr_link):
+                task_types.append("fix_proposal")
 
-        test_code, fetch_reason, fetch_detail = fetch_test_code(repo_url, sha, test_name)
-        if not test_code:
-            stats["skipped_test_code_fetch_failed"] += 1
-            if fetch_reason in {
-                "git_init_failed",
-                "git_remote_add_failed",
-                "git_fetch_sha_failed",
-                "git_checkout_failed",
-                "git_timeout",
-            }:
-                stats["skipped_test_code_fetch_git_fail"] += 1
-            if fetch_reason == "test_file_missing_at_sha":
-                stats["skipped_test_code_fetch_file_missing"] += 1
-            if len(fetch_fail_examples) < 10:
-                fetch_fail_examples.append(
-                    {
-                        "repo_url": repo_url,
-                        "sha": sha,
-                        "test_name": test_name,
-                        "reason": fetch_reason,
-                        "detail": fetch_detail,
-                    }
-                )
-            _update_progress(iterator, tqdm, stats)
-            continue
+            if not task_types:
+                stats["skipped_no_task_types"] += 1
+                _update_progress(iterator, tqdm, stats)
+                continue
 
-        known_fix_diff = ""
-        if "fix_proposal" in task_types and github_token:
-            known_fix_diff = fetch_pr_diff(pr_link, github_token)
-            if known_fix_diff:
-                stats["fix_diff_fetched"] += 1
+            test_code, fetch_reason, fetch_detail = fetch_test_code(repo_url, sha, test_name)
+            if not test_code:
+                stats["skipped_test_code_fetch_failed"] += 1
+                if fetch_reason in {
+                    "git_init_failed",
+                    "git_remote_add_failed",
+                    "git_fetch_sha_failed",
+                    "git_checkout_failed",
+                    "git_timeout",
+                }:
+                    stats["skipped_test_code_fetch_git_fail"] += 1
+                if fetch_reason == "test_file_missing_at_sha":
+                    stats["skipped_test_code_fetch_file_missing"] += 1
+                if len(fetch_fail_examples) < 10:
+                    fetch_fail_examples.append(
+                        {
+                            "repo_url": repo_url,
+                            "sha": sha,
+                            "test_name": test_name,
+                            "reason": fetch_reason,
+                            "detail": fetch_detail,
+                        }
+                    )
+                _update_progress(iterator, tqdm, stats)
+                continue
 
-        rows.append(
-            {
+            known_fix_diff = ""
+            if "fix_proposal" in task_types and github_token:
+                known_fix_diff = fetch_pr_diff(pr_link, github_token)
+                if known_fix_diff:
+                    stats["fix_diff_fetched"] += 1
+
+            row_out = {
                 "repo_url": repo_url,
                 "sha": sha,
                 "test_name": test_name,
@@ -296,12 +355,29 @@ def build(
                 "test_code": test_code,
                 "known_fix_diff": known_fix_diff,
             }
-        )
-        stats["kept"] += 1
-        _update_progress(iterator, tqdm, stats, processed, total_rows)
+            writer.writerow(row_out)
+            out_fp.flush()
+            stats["kept"] += 1
 
-    out = pd.DataFrame(rows)
-    Path(output_csv).parent.mkdir(parents=True, exist_ok=True)
+            row_key = (
+                row_out["repo_url"],
+                row_out["sha"],
+                row_out["test_name"],
+            )
+            if row_key not in canonical_rows:
+                canonical_rows[row_key] = row_out
+            else:
+                stats["duplicate_key_rows_seen"] += 1
+                current = canonical_rows[row_key]
+                if _row_preference_rank(row_out) > _row_preference_rank(current):
+                    canonical_rows[row_key] = row_out
+                    stats["duplicate_key_replaced"] += 1
+                else:
+                    stats["duplicate_key_kept_existing"] += 1
+            _update_progress(iterator, tqdm, stats, processed, total_rows)
+
+    out = pd.DataFrame(list(canonical_rows.values()), columns=OUTPUT_COLUMNS)
+    stats["kept_unique"] = len(out)
     out.to_csv(output_csv, index=False)
 
     if tqdm is None:

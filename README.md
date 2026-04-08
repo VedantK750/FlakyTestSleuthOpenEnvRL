@@ -1,3 +1,16 @@
+---
+title: FlakySleuth Environment Server
+emoji: "🔍"
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+app_port: 8000
+base_path: /web
+tags:
+  - openenv
+---
+
 # FlakySleuth Environment
 
 OpenEnv-compatible RL environment for flaky-test investigation in real Python repos.
@@ -45,35 +58,57 @@ curl -s http://localhost:8000/health
 
 ## Run Inference
 
-Recommended (OpenRouter):
+Recommended (HF Router/OpenRouter/OpenAI compatible):
 
 ```bash
-export OPENROUTER_API_KEY=your_openrouter_api_key
-export API_BASE_URL=https://openrouter.ai/api/v1
-export MODEL_NAME=qwen/qwen3.6-plus:free
+export HF_TOKEN=your_hf_token
+# optional:
+# export API_BASE_URL=https://router.huggingface.co/v1
+# export MODEL_NAME=openai/gpt-oss-120b:novita
 
-python inference.py --dataset-path dataset/py_tasks.csv --episodes-per-task 5
+python inference.py --dataset-path dataset/py_tasks.csv --episodes-per-task 2
 ```
+
+### Run Inference From Space UI
+
+When deployed, the Space homepage serves a UI at `/` (also `/web`) that starts
+`inference.py` in the background and streams logs live.
+
+UI defaults:
+- `episodes_per_task=1`
+- slider range up to `100`
+- live ETA estimator: `selected_tasks × episodes_per_task × 180s`
+- warning when ETA may exceed 20 minutes (hackathon guidance)
 
 ### `inference.py` flags
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
 | `--dataset-path` | `str` | `dataset/py_tasks.csv` | Processed task CSV used by env |
-| `--episodes-per-task` | `int` | `5` | Episodes per selected task type |
+| `--episodes-per-task` | `int` | `2` | Episodes per selected task type |
 | `--task-types` | `str` | `classify,root_cause,fix_proposal` | Comma-separated task types |
-| `--no-progress` | bool | `False` | Disable progress bars |
-| `--trace-agent` | bool | `False` | Print model output, action/tool call, and step results |
-| `--trace-prompts` | bool | `False` | Also print prompts sent to the model |
-| `--trace-max-chars` | `int` | `2500` | Max chars per traced block |
+| `--max-steps` | `int` | `20` | Max steps per episode |
+| `--no-progress` | flag | `False` | Disable progress bars in non-compliance mode |
+| `--trace-agent` | flag | `False` | Print detailed action/model/tool trace |
+| `--trace-prompts` | flag | `False` | Include full prompts in trace |
+| `--trace-max-chars` | `int` | `2500` | Clip size for traced prompt/output blocks |
+| `--compliance-stdout` | flag | `True` | Strict `[START]/[STEP]/[END]` logs (default on) |
+| `--no-compliance-stdout` | flag | `False` | Switch to baseline summary/progress output |
+| `--benchmark-name` | `str` | `flakysleuth` | Label printed in `[START]` logs |
+| `--history-prune-start-step` | `int` | `12` | Start compacting history from this step |
+| `--history-window-turns` | `int` | `4` | Keep this many recent assistant/user turns on prune |
+| `--history-max-chars` | `int` | `50000` | Force prune when message history exceeds this size |
 
-Trace to log:
+Detailed trace to log:
 ```bash
 python inference.py \
   --dataset-path dataset/py_tasks.csv \
-  --episodes-per-task 5 \
+  --episodes-per-task 1 \
   --task-types classify,root_cause \
-  --trace-agent --trace-prompts > agent_trace.log 2>&1
+  --no-compliance-stdout \
+  --trace-agent \
+  --history-prune-start-step 12 \
+  --history-window-turns 4 > agent_trace.log 2>&1
 ```
 
 ## OpenEnv CLI

@@ -41,6 +41,9 @@ class FlakySleuthEnv:
         self.cumulative_progress = 0.0
         self.files_read: set[str] = set()
         self.episode_actions: list[FlakySleuthAction] = []
+        self.search_pattern_counts: dict[str, int] = {}
+        self.search_context_counts: dict[str, int] = {}
+        self.consecutive_searches = 0
 
     def reset(self) -> FlakySleuthObservation:
         if self.sandbox:
@@ -61,6 +64,9 @@ class FlakySleuthEnv:
         self.cumulative_progress = 0.0
         self.files_read = set()
         self.episode_actions = []
+        self.search_pattern_counts = {}
+        self.search_context_counts = {}
+        self.consecutive_searches = 0
 
         return self._make_obs()
 
@@ -153,6 +159,8 @@ class FlakySleuthEnv:
 
         progress = 0.0
         output = ""
+        if action.action_type != "search_code":
+            self.consecutive_searches = 0
 
         if action.action_type == "read_file":
             content = self.sandbox.read_file(action.argument)
@@ -168,8 +176,13 @@ class FlakySleuthEnv:
                 progress = self._file_relevance_reward(action.argument)
 
         elif action.action_type == "search_code":
+            self.consecutive_searches += 1
             output = self.sandbox.grep(action.argument)
-            progress = self._search_relevance_reward(action.argument)
+            base_progress = self._search_relevance_reward(action.argument)
+            spam_penalty, warnings = self._search_spam_penalty(action.argument, output)
+            progress = max(-0.25, base_progress - spam_penalty)
+            if warnings:
+                output = f"{output}\n\nWARNING: {' '.join(warnings)}"
 
         elif action.action_type == "run_test":
             output = self.sandbox.run_test(self.current_task.get("test_name", ""))
@@ -197,6 +210,60 @@ class FlakySleuthEnv:
         if any(signal in pattern_lower for signal in FLAKY_SIGNAL_PATTERNS):
             return 0.04
         return 0.01
+
+    def _search_spam_penalty(self, pattern: str, output: str) -> tuple[float, list[str]]:
+        penalty = 0.0
+        warnings: list[str] = []
+
+        pattern_key = " ".join(pattern.lower().split())
+        if pattern_key:
+            pattern_count = self.search_pattern_counts.get(pattern_key, 0) + 1
+            self.search_pattern_counts[pattern_key] = pattern_count
+            if pattern_count > 1:
+                repeat_penalty = min(0.02 * (pattern_count - 1), 0.12)
+                penalty += repeat_penalty
+                warnings.append(
+                    f"Repeated search pattern ({pattern_count}x) penalty={repeat_penalty:.2f}."
+                )
+
+        context_hits = self._extract_search_hits(output)
+        context_key = f"{pattern_key}::{','.join(context_hits)}"
+        context_count = self.search_context_counts.get(context_key, 0) + 1
+        self.search_context_counts[context_key] = context_count
+        if context_count > 1:
+            context_penalty = min(0.03 * (context_count - 1), 0.15)
+            penalty += context_penalty
+            warnings.append(
+                f"Same search context repeated ({context_count}x) penalty={context_penalty:.2f}."
+            )
+
+        if self.consecutive_searches > 3:
+            streak_penalty = min(0.02 * (self.consecutive_searches - 3), 0.20)
+            penalty += streak_penalty
+            warnings.append(
+                f"Search-only streak={self.consecutive_searches} penalty={streak_penalty:.2f}."
+            )
+
+        return min(penalty, 0.35), warnings
+
+    def _extract_search_hits(self, output: str) -> tuple[str, ...]:
+        files: list[str] = []
+        seen: set[str] = set()
+        for raw_line in output.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("No matches found") or line.startswith("Search "):
+                continue
+            filepath = line.split(":", 1)[0].strip()
+            if filepath.startswith("./"):
+                filepath = filepath[2:]
+            if not filepath.endswith(".py"):
+                continue
+            if filepath not in seen:
+                seen.add(filepath)
+                files.append(filepath)
+            if len(files) >= 5:
+                break
+        return tuple(files)
 
     def _make_obs(self, tool_output: str | None = None) -> FlakySleuthObservation:
         if not self.current_task:
