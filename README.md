@@ -15,6 +15,8 @@ tags:
 
 OpenEnv-compatible RL environment for flaky-test investigation in real Python repos.
 
+Flaky tests are dangerous because they make CI results untrustworthy: real regressions can be ignored as "just flaky," while healthy code can fail randomly and block releases, wasting engineering time and eroding confidence in test signals. We are building this Gym-style RL environment so agents can practice flaky-test triage in realistic repositories, learn to separate true failures from nondeterministic noise, and generate faster, more reliable debugging and fix strategies at scale.
+
 ## Setup
 
 ```bash

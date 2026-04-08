@@ -35,6 +35,8 @@ from env.models import FlakySleuthAction, FlakySleuthObservation
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 HF_TOKEN = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+# Optional for environments created via from_docker_image(); kept for checklist parity.
+LOCAL_IMAGE_NAME = os.environ.get("LOCAL_IMAGE_NAME")
 RAW_API_KEY = os.environ.get("API_KEY")
 API_KEY = RAW_API_KEY or OPENROUTER_API_KEY or OPENAI_API_KEY or HF_TOKEN or ""
 
