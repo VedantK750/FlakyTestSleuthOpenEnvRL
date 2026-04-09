@@ -285,7 +285,7 @@ def _compliance_log_end(success: bool, steps: int, score: float, rewards: list[f
     rewards_value = ",".join(f"{r:.2f}" for r in rewards)
     print(
         f"[END] success={str(bool(success)).lower()} steps={steps} "
-        f"score={score:.2f} rewards={rewards_value}",
+        f"score={score:.3f} rewards={rewards_value}",
         flush=True,
     )
 
